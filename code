@@ -1,0 +1,431 @@
+
+
+clc; %clean command window
+close all; %close all figures
+clear; %delete all variables in the workspace
+
+PLOT_MODE=0; % to plot PLOT_MODE=1;
+
+% BEFORE_SEC = 0;
+% AFTER_SEC = 0;
+
+%this defines snippets of time in seconds before and after each event
+BEFORE_SEC = 6;
+AFTER_SEC = 2;
+
+%this is to access files 
+data_dir = 'E:\fiber photometry\toanalyze_test_veh';
+fileList = dir([data_dir filesep '*.mat']); %look for all the mat files in data_dir folder
+nFiles = length(fileList);
+
+
+for i=1:nFiles
+    
+    filename = fileList(i).name; 
+	% run the main analysis "analyse_photometry" on the current data file
+    [t, sfreq, dff, dff_filtered, transients2] = analyse_photometry(data_dir,filename, PLOT_MODE);
+	% extract event timestamps from excel file
+    [e1,e2] = get_events(data_dir, filename);
+    
+	% plot the filtered dff for each file
+    fig=figure()
+    subplot(3,3,[1:3])
+    hold on
+    plot(t,dff_filtered,'k')
+    xlim([2000 2800])
+    ylim([-1 1.5])
+    
+    event = 'turn';
+    cond = {'fam','nov'};
+    cond_colors =[[0.0 0.6 0.4];[0.6 0 0.6]];
+    transients2_pro={};
+    transients2_width={};
+    transients2_time={};
+    MeanCond=[];
+	
+	
+    % for each condition, extract snipets around the event to average them according to each event type and condition
+    for iCond = 1:size(cond,2)
+                                
+        cmd = sprintf('value = e2.%s.%s;',event,cond{iCond});eval(cmd);
+             
+        b_sec = value.beginning / sfreq;
+        e_sec = value.end / sfreq;
+        nEvents = length(e_sec);
+        
+        colors_ = repmat(cond_colors(iCond,:),nEvents,1);
+        
+        if (BEFORE_SEC==0) && (AFTER_SEC==0)
+                        
+            snipets = zeros(nEvents,(BEFORE_SEC+AFTER_SEC)*sfreq)
+
+            for iEvent=1:nEvents
+                ix1 = find(t>b_sec(iEvent),1,'first');
+                ix2 = find(t<e_sec(iEvent),1,'last') ; 
+                snipets(iEvent,:) = dff_filtered(ix1:ix2)
+                subplot(3,3,[1:3])
+                plot(t(ix1:ix2),dff_filtered(ix1:ix2),'color',colors_(iEvent,:));
+                plot([e_sec(iEvent), e_sec(iEvent)],[min(dff_filtered) max(dff_filtered)],'color',[cond_colors(iCond,:)]);
+                subplot(3,3,3+iCond)
+                hold on
+                plot(dff_filtered(ix1:ix2),'color',colors_(iEvent,:));                
+            end        
+
+            
+        else
+		
+            %finding snippets of time for events 
+            snipets = zeros(nEvents,(BEFORE_SEC+AFTER_SEC)*sfreq);
+            
+            transients2_pro{iCond}=[];
+            transients2_width{iCond}=[];
+            transients2_time{iCond}=[];
+            IdxDetectedTransient{iCond}=[];
+            
+            
+			%for each behavioral event
+            for iEvent=1:nEvents
+                ix1 = find(t>e_sec(iEvent)-BEFORE_SEC,1,'first');
+                ix2 = find(t<e_sec(iEvent)+AFTER_SEC,1,'last') ; 
+                snipets(iEvent,:) = dff_filtered(ix1:ix2);
+                subplot(3,3,[1:3])
+                
+                ii1 = find(transients2.lc>e_sec(iEvent)-BEFORE_SEC,1,'first');
+                ii2 = find(transients2.lc<e_sec(iEvent)+AFTER_SEC,1,'last'); 
+                
+                if ~isempty(ii1) && ~isempty(ii2)
+                    plot(transients2.lc(ii1:ii2), transients2.pk(ii1:ii2),'Marker', '+','color',colors_(iEvent,:));
+                    
+                    tmp = transients2.pro(ii1:ii2);
+                    [v,ii]=max(size(tmp));
+                    if (ii==1),tmp =tmp';end
+                    transients2_pro{iCond} = [transients2_pro{iCond} tmp];
+                    
+                    tmp = transients2.wd(ii1:ii2);
+                    [v,ii]=max(size(tmp));
+                    if (ii==1),tmp =tmp';end                    
+                    transients2_width{iCond} = [transients2_width{iCond} tmp];
+                    
+                    tmp = transients2.lc(ii1:ii2);
+                    [v,ii]=max(size(tmp));
+                    if (ii==1),tmp =tmp';end                    
+                    transients2_time{iCond} = [transients2_time{iCond} tmp];
+                    
+                    if ~isempty(tmp), IdxDetectedTransient{iCond}=[IdxDetectedTransient{iCond} iEvent];end
+                end
+                
+            end
+
+			time_snipets = zeros(transients2_time,(BEFORE_SEC+AFTER_SEC)*sfreq)
+			iw1 = find(t>e_sec(transients2_time)-BEFORE_SEC,1,'first');
+			iw2 = find(t<e_sec(transients2_time)+AFTER_SEC,1,'last') ; 
+
+			time_snipets(transients2_time,:) = dff_filtered(iw1:iw2);
+			subplot(3,3,[1:3])
+			plot(t(iw1:iw2),dff_filtered(iw1:iw2),'color',colors_(transients2_time,:));
+			plot([e_sec(transients2_time), e_sec(transients2_time)],[min(dff_filtered) max(dff_filtered)],'color',[cond_colors(iCond,:)]);  
+			
+		end
+
+              
+	end    
+			
+	%plotting mean +standard dev of detected snippets
+	subplot(3,3,6+iCond)
+	hold on
+	mean_ = mean(snipets(IdxDetectedTransient{iCond},:));
+	std_dev = std(snipets(IdxDetectedTransient{iCond},:));
+	curve1 = mean_ + std_dev;
+	curve2 = mean_ - std_dev;
+	inBetween = [curve1, fliplr(curve2)];
+	x = 1:(BEFORE_SEC+AFTER_SEC)*sfreq;
+	x = x / sfreq;
+	x = x - BEFORE_SEC;
+	x2 = [x, fliplr(x)];
+	h=fill(x2, inBetween, [cond_colors(iCond,:)]);
+	set(h,'facealpha',.2);
+	set(h,'edgecolor','none');
+	plot(x,mean_,'color',[cond_colors(iCond,:)]); 
+	subplot(3,3,3+iCond)
+	hold on
+	for iEvent=1:nEvents            
+		plot(x,snipets(iEvent,:),'color',colors_(iEvent,:));
+	end
+	for iEvent=1:size(IdxDetectedTransient{iCond},2)          
+		plot(x,snipets(IdxDetectedTransient{iCond}(iEvent),:),'color',colors_(iEvent,:));
+	end
+                     
+           
+end  
+        
+MeanCond(iCond,:)=mean_;%store mean detected transient for each condition
+
+%plotting prominences of detected transients
+subplot(3,3,6)
+hold on
+pro_fam = transients2_pro{1};
+pro_nov = transients2_pro{2};
+plot(zeros(length(pro_fam),1),pro_fam,'Marker','o','markerfacecolor',cond_colors(1,:),'MarkerEdgeColor','none','LineStyle','none');
+plot(ones(length(pro_nov),1),pro_nov,'Marker','o','markerfacecolor',cond_colors(2,:),'MarkerEdgeColor','none','LineStyle','none');
+
+%plotting widths of detected transients
+subplot(3,3,9)
+hold on
+width_fam = transients2_width{1};
+width_nov = transients2_width{2};
+plot(zeros(length(width_fam),1),width_fam,'Marker','o','markerfacecolor',cond_colors(1,:),'MarkerEdgeColor','none','LineStyle','none');
+plot(ones(length(width_nov),1),width_nov,'Marker','o','markerfacecolor',cond_colors(2,:),'MarkerEdgeColor','none','LineStyle','none');  
+print(fig,[data_dir filesep filename '_behavior.png'],'-dpng');
+savefig(fig,[data_dir filesep filename '_behavior.fig']);   
+
+%Create table to store values for all mice
+Table_pro_fam{i,1}=pro_fam;
+Table_pro_nov{i,1}=pro_nov;
+Table_width_fam{i,1}=width_fam;
+Table_width_nov{i,1}=width_nov;    
+MeanGroup_fam(i,:)=MeanCond(1,:);
+MeanGroup_nov(i,:)=MeanCond(2,:);
+
+%Plot means of all mice together
+figure
+subplot(1,2,1)
+		MEAN_ = mean(MeanGroup_fam,1);
+		std_dev = std(MeanGroup_fam,1);
+		curve1 = MEAN_ + std_dev;
+		curve2 = MEAN_ - std_dev;
+		inBetween = [curve1, fliplr(curve2)];
+		x = 1:(BEFORE_SEC+AFTER_SEC)*sfreq;
+		x = x / sfreq;
+		x = x - BEFORE_SEC;
+		x2 = [x, fliplr(x)];
+		h=fill(x2, inBetween, [cond_colors(1,:)]);
+		set(h,'facealpha',.2);
+		set(h,'edgecolor','none');
+		hold on,
+		plot(x,MEAN_,'color',[cond_colors(1,:)]); 
+		ylim([-0.1 0.4])
+
+subplot(1,2,2)
+		MEAN_ = mean(MeanGroup_nov,1);
+		std_dev = std(MeanGroup_nov,1);
+		curve1 = MEAN_ + std_dev;
+		curve2 = MEAN_ - std_dev;
+		inBetween = [curve1, fliplr(curve2)];
+		x = 1:(BEFORE_SEC+AFTER_SEC)*sfreq;
+		x = x / sfreq;
+		x = x - BEFORE_SEC;
+		x2 = [x, fliplr(x)];
+		h=fill(x2, inBetween, [cond_colors(2,:)]);
+		set(h,'facealpha',.2);
+		set(h,'edgecolor','none');
+		hold on,
+		plot(x,MEAN_,'color',[cond_colors(2,:)]); 
+		ylim([-0.1 0.4])
+
+
+%mean of peaks for all mice
+for j=1:size(Table_pro_fam,1)
+Mean_pro_fam(j,1)=mean(Table_pro_fam{j,1});   
+Mean_pro_nov(j,1)=mean(Table_pro_nov{j,1});   
+Mean_width_fam(j,1)=mean(Table_width_fam{j,1});   
+Mean_width_nov(j,1)=mean(Table_width_nov{j,1});   
+end
+
+
+
+% function to retrieve events stored in an excel file
+% this is defined by your own way of describing behavioral events
+% this will need modification by you depending on your behavioral task
+function [e1,e2] = get_events(data_dir, filename)
+    j = ['Journal_' filename(6:end-4) '.xlsx'];
+    table_ = readtable([data_dir filesep j]);
+	% convert excel file to a matlab table
+    col_names = table_.Properties.VariableNames;
+    nColumns = size(col_names,2);
+    events = ["Tail","Injection"];
+    e1 = [];
+    nEvents = size(events,2);            
+    for j=1:nColumns        
+        for k=1:nEvents            
+            c = col_names{j};
+            e = events(k);
+            l = strlength(e);            
+            if (length(c)>l) && strcmp(c(1:strlength(e)),e)                                               
+                if ~isfield(e1,e)
+                  cmd = sprintf('e1.%s.beginning=[];',e);  
+                  eval(cmd);
+                  cmd = sprintf('e1.%s.end=[];',e);  
+                  eval(cmd);
+                end                
+                if  strcmp(c(end-2:end),'end')
+                    cmd = sprintf('e1.%s.end=[e1.%s.end table_.%s(2)];', e, e, c);  
+                    eval(cmd);
+                else
+                    cmd = sprintf('e1.%s.beginning=[e1.%s.beginning table_.%s(2)];',e ,e, c);  
+                    eval(cmd);                
+                end
+                
+            end
+        end
+    end
+    
+    
+    events = ["expl_fam","turn_fam","expl_nov","turn_nov"];
+    e2 = [];
+    nEvents = size(events,2);
+            
+    for j=1:nColumns        
+        for k=1:nEvents            
+            c = col_names{j};
+            e = events(k);
+            tmp=split(e,'_');
+            l = strlength(e);
+            
+            if (length(c)>l) && strcmp(c(1:strlength(e)),e)                                               
+                if ~isfield(e2,tmp(1))
+                  cmd = sprintf('e2.%s.fam.beginning=[];',tmp(1));  
+                  eval(cmd);
+                  cmd = sprintf('e2.%s.fam.end=[];',tmp(1));  
+                  eval(cmd);
+                  cmd = sprintf('e2.%s.nov.beginning=[];',tmp(1));  
+                  eval(cmd);
+                  cmd = sprintf('e2.%s.nov.end=[];',tmp(1));  
+                  eval(cmd);                  
+                end                               
+                
+                if  strcmp(c(end-2:end),'end')
+                    cmd = sprintf('e2.%s.%s.end=[e2.%s.%s.end table_.%s(2)];', tmp(1), tmp(2), tmp(1), tmp(2), c);  
+                    eval(cmd);
+                else
+                    cmd = sprintf('e2.%s.%s.beginning=[e2.%s.%s.beginning table_.%s(2)];', tmp(1), tmp(2), tmp(1), tmp(2), c); 
+                    eval(cmd);                
+                end
+                
+            end
+        end
+    end    
+    
+    
+end
+
+
+% function for plotting everything
+function plot_all(t, iso, sig, iso_fit, dff, dff_filtered, transients, transients2, data_dir, filename)
+
+filename = filename(1:end-8);
+
+
+fig=figure();
+
+%plot raw and fit
+hold on
+plot(t,iso,'color', [130, 0, 200]/255);
+plot(t,sig,'color', [0, 169, 255]/255);
+plot(t,iso_fit,'color', [130, 0, 200]/255, 'linestyle', ':');
+legend('isosbestic','raw signal','iso_fit');
+print(fig,[data_dir filesep filename '_rawdata.png'],'-dpng');
+savefig(fig,[data_dir filesep filename '_rawdata.fig']);
+clf(fig);
+
+% plot dff
+hold on
+plot(t,dff,'color', [0, 255, 56]/255);
+legend('dff (%)');
+print(fig,[data_dir filesep filename '_dff.png'],'-dpng');
+savefig(fig,[data_dir filesep filename '_dff.fig']);
+clf(fig);
+
+%plot transiernt detection results
+hold on
+plot(t,dff,'color', [0, 255, 56]/255);
+plot(transients.lc,transients.pk,'x')
+legend('dff (%)');
+print(fig,[data_dir filesep filename '_transients.png'],'-dpng');
+savefig(fig,[data_dir filesep filename '_transients.fig']);
+clf(fig);
+
+%plot dff filtered and transient detection results
+hold on
+plot(t,dff_filtered,'color', [0, 255, 56]/255);
+plot(transients2.lc,transients2.pk,'x');
+legend('dff filtered 0.02Hz 0.14Hz (%)');
+print(fig,[data_dir filesep filename '_transients2.png'],'-dpng');
+savefig(fig,[data_dir filesep filename '_transients2.fig']);
+close(fig);
+
+end
+
+
+% function to analyze and filter the fiber signal, 
+function [t, samplingFrequency, dff, dff_filtered, transients2] = analyse_photometry(data_dir, filename, plot_mode)
+
+    data_path =  [data_dir filesep filename];    
+    load(data_path);
+    
+    nSamples = length(ref);
+    samplingFrequency = framerate/2;
+	%recreate time vector based don sampling rate
+    t = 1:1:nSamples;
+    t = t/samplingFrequency;
+	
+
+	% remove first minute to avoid exponential decay at the beginning which perturb the linear fit
+    t = t(samplingFrequency*60:end);
+    iso = ref(samplingFrequency*60:end);
+    sig = sig(samplingFrequency*60:end);
+
+	% perform linear fit
+    iso_fit = control_fit(iso,sig);
+	
+	% calculate dff in percentage
+    dff = dff_(iso_fit,sig);
+    
+	% bandpass filter the dff signal to improve detection of the transients.	
+    low_freq = 0.02;
+    high_freq = 0.14;
+    nFreq = length(high_freq);	
+    dff_filtered = filter(dff, samplingFrequency, [low_freq high_freq]);
+
+    MinPeakProminence = 0.4;	
+    transients = detect_transients(dff, t, MinPeakProminence);
+	
+    MinPeakProminence = 0.1;
+    transients2 = detect_transients(dff_filtered, t, MinPeakProminence);
+    
+    if plot_mode
+		% build the complex plot
+        plot_all(t, iso, sig, iso_fit, dff, dff_filtered, transients, transients2, data_dir, filename)
+    end
+    
+
+end
+
+%function to detect transients and their parameters
+function transients = detect_transients(dff_filtered, t, MinPeakProminence)
+% pk: peak amplitudes, lc: peak indices, wd: peak widths, pro: peak prominences
+[pk,lc, wd, pro] = findpeaks(dff_filtered,t,'MinPeakProminence',MinPeakProminence);
+transients.pk = pk;
+transients.lc = lc;
+transients.wd = wd;
+transients.pro = pro;
+end
+
+%function to fit GCamp and isosbestic signals
+function iso_fit=control_fit(iso,sig)
+	%linear fir
+    reg = polyfit(iso, sig, 1);
+    a = reg(1);
+    b = reg(2);
+    iso_fit = a.*iso + b;
+end
+
+%delta f over f
+function dff = dff_(iso_fit,sig)
+    dff = ((sig - iso_fit) ./ iso_fit) * 100.0; % Lerner, T. N. et al. Intact-brain analyses reveal distinct information carried by SNc dopamine subcircuits. Cell 162, 635?647 (2015).
+end
+
+%bandpass filter the signal using a butterworth filter
+function dff_filt = filter(dff, samplingFrequency, freq)
+    [b,c] = butter(4,[freq(1),freq(2)]/(samplingFrequency/2), 'bandpass');
+    dff_filt = filtfilt(b, c, dff);
+end
